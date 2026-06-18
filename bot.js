@@ -347,9 +347,9 @@ client.on("interactionCreate", async (interaction) => {
     const modal = new ModalBuilder().setCustomId("verify_modal").setTitle("✦ Form Verifikasi Female");
     modal.addComponents(
       r1(new TextInputBuilder().setCustomId("nm").setLabel("Nama Panggilan").setStyle(TextInputStyle.Short).setPlaceholder("Nadia, Rara, dll").setRequired(true).setMaxLength(30)),
-      r1(new TextInputBuilder().setCustomId("age").setLabel("Usia (min. 17)").setStyle(TextInputStyle.Short).setPlaceholder("21").setRequired(true).setMaxLength(3)),
+      r1(new TextInputBuilder().setCustomId("age").setLabel("Usia)").setStyle(TextInputStyle.Short).setPlaceholder("0").setRequired(true).setMaxLength(3)),
       r1(new TextInputBuilder().setCustomId("sm").setLabel("Sosial Media Aktif (opsional)").setStyle(TextInputStyle.Short).setPlaceholder("@username").setRequired(false).setMaxLength(50)),
-      r1(new TextInputBuilder().setCustomId("why").setLabel("Kenapa ingin jadi Female Member?").setStyle(TextInputStyle.Paragraph).setPlaceholder("Ceritain dikit tentang kamu…").setRequired(true).setMaxLength(350)),
+      r1(new TextInputBuilder().setCustomId("why").setLabel("Dari mana kamu mengetahui Cosmic Corner?").setStyle(TextInputStyle.Paragraph).setPlaceholder("Ceritain dikit saja...").setRequired(true).setMaxLength(350)),
     );
     await interaction.showModal(modal);
   }
@@ -361,8 +361,8 @@ client.on("interactionCreate", async (interaction) => {
     const sm  = interaction.fields.getTextInputValue("sm") || "—";
     const why = interaction.fields.getTextInputValue("why");
 
-    if (isNaN(+age) || +age < 17 || +age > 80)
-      return interaction.reply({ content: "✗ Usia tidak valid (min. 17).", ephemeral: true });
+    if (isNaN(+age) || +age < 10 || +age > 80)
+      return interaction.reply({ content: "✗ Usia tidak valid (Dibawah Umur 10).", ephemeral: true });
 
     const embed = new EmbedBuilder()
       .setColor(CONFIG.GOLD)
@@ -372,7 +372,7 @@ client.on("interactionCreate", async (interaction) => {
         { name: "👤  Nama",   value: nm,           inline: true },
         { name: "🎂  Usia",   value: `${age} tahun`, inline: true },
         { name: "📱  Sosmed", value: sm,            inline: true },
-        { name: "💬  Alasan", value: why },
+        { name: "💬  Mengetahui Cosmic Corner", value: why },
       )
       .setFooter({ text: `ID ${interaction.user.id}` })
       .setTimestamp();
