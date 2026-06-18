@@ -347,7 +347,7 @@ client.on("interactionCreate", async (interaction) => {
     const modal = new ModalBuilder().setCustomId("verify_modal").setTitle("✦ Form Verifikasi Female");
     modal.addComponents(
       r1(new TextInputBuilder().setCustomId("nm").setLabel("Nama Panggilan").setStyle(TextInputStyle.Short).setPlaceholder("Nadia, Rara, dll").setRequired(true).setMaxLength(30)),
-      r1(new TextInputBuilder().setCustomId("age").setLabel("Usia)").setStyle(TextInputStyle.Short).setPlaceholder("0").setRequired(true).setMaxLength(3)),
+      r1(new TextInputBuilder().setCustomId("age").setLabel("Usia)").setStyle(TextInputStyle.Short).setPlaceholder("17").setRequired(true).setMaxLength(3)),
       r1(new TextInputBuilder().setCustomId("sm").setLabel("Sosial Media Aktif (opsional)").setStyle(TextInputStyle.Short).setPlaceholder("@username").setRequired(false).setMaxLength(50)),
       r1(new TextInputBuilder().setCustomId("why").setLabel("Dari mana kamu mengetahui Cosmic Corner?").setStyle(TextInputStyle.Paragraph).setPlaceholder("Ceritain dikit saja...").setRequired(true).setMaxLength(350)),
     );
