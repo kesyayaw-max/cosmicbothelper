@@ -50,7 +50,7 @@ client.once("ready", () => {
   console.log(`  Prefix umum  : ${PREFIX}`);
   console.log(`  Prefix staff : ${STAFF_PREFIX}`);
   console.log(`  Prefix owner : ${OWNER_PREFIX}\n`);
-  client.user.setActivity(`${PREFIX}help | 🌸 Verify & Giveaway`, { type: 3 });
+  client.user.setActivity(`Cosmic Corner Helper`, { type: 3 });
 });
 
 // ══════════════════════════════════════════════════════════════════
