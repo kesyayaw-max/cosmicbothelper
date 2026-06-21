@@ -31,6 +31,9 @@ const CONFIG = {
   STAFF_ROLE_ID:       process.env.STAFF_ROLE_ID,
   TICKET_CATEGORY_ID:  process.env.TICKET_CATEGORY_ID,
   GIVEAWAY_CHANNEL_ID: process.env.GIVEAWAY_CHANNEL_ID,
+  REPORT_CHANNEL_ID:   process.env.REPORT_CHANNEL_ID,    // Channel untuk panel report
+  REPORT_CATEGORY_ID:  process.env.REPORT_CATEGORY_ID,   // Category untuk ticket report
+  MOD_ROLE_ID:         process.env.MOD_ROLE_ID,           // Role moderator (bisa sama dgn STAFF_ROLE_ID)
 
   PINK:    0xF472B6,
   VIOLET:  0xA855F7,
@@ -96,6 +99,15 @@ client.on("messageCreate", async (msg) => {
     if (cmd === "verifysetup") {
       const embed = buildVerifyPanel();
       const row   = verifyPanelRow();
+      await msg.channel.send({ embeds: [embed], components: [row] });
+      await msg.delete().catch(() => {});
+      return;
+    }
+
+    // cch!! reportsetup
+    if (cmd === "reportsetup") {
+      const embed = buildReportPanel();
+      const row   = reportPanelRow();
       await msg.channel.send({ embeds: [embed], components: [row] });
       await msg.delete().catch(() => {});
       return;
@@ -235,6 +247,23 @@ client.on("messageCreate", async (msg) => {
       const tickets = msg.guild.channels.cache.filter(c => c.name.startsWith("verifyfemale-"));
       const list = tickets.size ? tickets.map(c => `${c}`).join("\n") : "Tidak ada ticket aktif.";
       return msg.reply({ embeds: [new EmbedBuilder().setColor(CONFIG.VIOLET).setTitle(`✦ Ticket Aktif (${tickets.size})`).setDescription(list)] });
+    }
+
+    // cch! reports — lihat semua report ticket aktif
+    if (cmd === "reports") {
+      const tickets = msg.guild.channels.cache.filter(c => c.name.startsWith("reportmember-"));
+      const list = tickets.size ? tickets.map(c => `${c}`).join("\n") : "Tidak ada report aktif.";
+      return msg.reply({ embeds: [new EmbedBuilder().setColor(0xF87171).setTitle(`🚨 Report Aktif (${tickets.size})`).setDescription(list)] });
+    }
+
+    // cch! closereport
+    if (cmd === "closereport") {
+      if (!msg.channel.name.startsWith("reportmember-")) {
+        return msg.reply({ embeds: [errEmbed("Perintah ini hanya bisa dipakai di dalam report channel.")] });
+      }
+      await msg.reply({ embeds: [new EmbedBuilder().setColor(CONFIG.DANGER).setDescription("🔒 Menutup report dalam 5 detik…")] });
+      setTimeout(() => msg.channel.delete().catch(() => {}), 5000);
+      return;
     }
 
     // cch! staffhelp
@@ -468,6 +497,178 @@ client.on("interactionCreate", async (interaction) => {
     await updateGiveawayEmbed(msgId, gw, interaction.guild);
     return interaction.reply({ content: "🎉 Kamu ikut giveaway! Good luck~", ephemeral: true });
   }
+
+  // ── BUTTON: open_report_ticket ───────────────────────────────────
+  if (interaction.isButton() && interaction.customId === "open_report_ticket") {
+    const { guild, user } = interaction;
+    const safeName = user.username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 18) || user.id.slice(-6);
+    const chName   = `reportmember-${safeName}`;
+
+    const existing = guild.channels.cache.find(c => c.name === chName);
+    if (existing)
+      return interaction.reply({ content: `Kamu sudah punya report aktif di ${existing}!`, ephemeral: true });
+
+    const modRole = CONFIG.MOD_ROLE_ID || CONFIG.STAFF_ROLE_ID;
+
+    const ch = await guild.channels.create({
+      name: chName,
+      type: ChannelType.GuildText,
+      parent: CONFIG.REPORT_CATEGORY_ID || CONFIG.TICKET_CATEGORY_ID || null,
+      permissionOverwrites: [
+        { id: guild.roles.everyone,  deny: [PermissionFlagsBits.ViewChannel] },
+        { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        ...(modRole ? [{
+          id: modRole,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels],
+        }] : []),
+        { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+      ],
+      topic: `report:${user.id}`,
+    });
+
+    await ch.send({
+      content: `${user}${modRole ? ` <@&${modRole}>` : ""}`,
+      embeds: [buildReportWelcome(user)],
+      components: [reportActionRow()],
+    });
+
+    await interaction.reply({ content: `🚨 Report dibuat → ${ch}`, ephemeral: true });
+    log(guild, "🚨 Report Dibuat", `${user.tag} membuka report\nChannel: \`${chName}\``, user, CONFIG.DANGER);
+  }
+
+  // ── BUTTON: fill_report_form ──────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === "fill_report_form") {
+    const modal = new ModalBuilder().setCustomId("report_modal").setTitle("🚨 Form Report Member");
+    modal.addComponents(
+      r1(new TextInputBuilder().setCustomId("rp_target").setLabel("Username / ID Member yang Dilaporkan").setStyle(TextInputStyle.Short).setPlaceholder("Contoh: budi123 atau ID-nya").setRequired(true).setMaxLength(50)),
+      r1(new TextInputBuilder().setCustomId("rp_category").setLabel("Kategori Pelanggaran").setStyle(TextInputStyle.Short).setPlaceholder("Spam / Toxic / Pelecehan / Scam / Lainnya").setRequired(true).setMaxLength(50)),
+      r1(new TextInputBuilder().setCustomId("rp_when").setLabel("Kapan Kejadiannya?").setStyle(TextInputStyle.Short).setPlaceholder("Contoh: Hari ini jam 14.00 di #general").setRequired(true).setMaxLength(80)),
+      r1(new TextInputBuilder().setCustomId("rp_detail").setLabel("Kronologi / Detail Kejadian").setStyle(TextInputStyle.Paragraph).setPlaceholder("Ceritakan detail kejadiannya selengkap mungkin...").setRequired(true).setMaxLength(500)),
+      r1(new TextInputBuilder().setCustomId("rp_proof").setLabel("Link Bukti (screenshot/video, opsional)").setStyle(TextInputStyle.Short).setPlaceholder("Link imgur/drive, atau tulis 'akan dikirim disini'").setRequired(false).setMaxLength(200)),
+    );
+    await interaction.showModal(modal);
+  }
+
+  // ── MODAL: report_modal ────────────────────────────────────────────
+  if (interaction.isModalSubmit() && interaction.customId === "report_modal") {
+    const target   = interaction.fields.getTextInputValue("rp_target");
+    const category = interaction.fields.getTextInputValue("rp_category");
+    const when     = interaction.fields.getTextInputValue("rp_when");
+    const detail   = interaction.fields.getTextInputValue("rp_detail");
+    const proof    = interaction.fields.getTextInputValue("rp_proof") || "Belum ada / menyusul";
+
+    const embed = new EmbedBuilder()
+      .setColor(CONFIG.DANGER)
+      .setTitle("🚨 Laporan Diterima")
+      .setDescription(`> Menunggu tindak lanjut moderator  •  <t:${Math.floor(Date.now()/1000)}:R>`)
+      .addFields(
+        { name: "🎯  Dilaporkan",  value: target,   inline: true },
+        { name: "🏷️  Kategori",    value: category, inline: true },
+        { name: "🕒  Waktu",       value: when,      inline: true },
+        { name: "📝  Kronologi",   value: detail },
+        { name: "📎  Bukti",       value: proof },
+      )
+      .setFooter({ text: `Pelapor ID: ${interaction.user.id}` })
+      .setTimestamp();
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`rpdone_${interaction.user.id}`).setLabel("✅ Tandai Selesai").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`rpdismiss_${interaction.user.id}`).setLabel("🚫 Tolak Laporan").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("close_report").setLabel("🔒 Tutup").setStyle(ButtonStyle.Danger),
+    );
+    await interaction.reply({ embeds: [embed], components: [row] });
+    log(interaction.guild, "📋 Laporan Masuk", `Pelapor: ${interaction.user.tag}\n**Target:** ${target}\n**Kategori:** ${category}`, interaction.user, CONFIG.DANGER);
+  }
+
+  // ── BUTTON: rpdone (tandai selesai) ────────────────────────────────
+  if (interaction.isButton() && interaction.customId.startsWith("rpdone_")) {
+    if (!isStaff(interaction.member))
+      return interaction.reply({ content: "✗ Staff/Mod only.", ephemeral: true });
+
+    const modal = new ModalBuilder().setCustomId(`rpdone_note_${interaction.customId.slice(7)}`).setTitle("✅ Catatan Penanganan");
+    modal.addComponents(r1(new TextInputBuilder().setCustomId("note").setLabel("Tindakan yang diambil").setStyle(TextInputStyle.Paragraph).setPlaceholder("Contoh: Member di-warn, pesan dihapus, dll").setRequired(true).setMaxLength(300)));
+    await interaction.showModal(modal);
+  }
+
+  // ── MODAL: rpdone_note ───────────────────────────────────────────
+  if (interaction.isModalSubmit() && interaction.customId.startsWith("rpdone_note_")) {
+    const reporterId = interaction.customId.split("_")[2];
+    const note = interaction.fields.getTextInputValue("note");
+
+    const embed = new EmbedBuilder()
+      .setColor(CONFIG.SUCCESS)
+      .setTitle("✅ Laporan Ditindaklanjuti")
+      .setDescription(`**Tindakan:** ${note}\n\n> Ditangani oleh ${interaction.user}`)
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed], components: [] });
+
+    const reporter = await interaction.guild.members.fetch(reporterId).catch(() => null);
+    if (reporter) {
+      await reporter.send({
+        embeds: [new EmbedBuilder()
+          .setColor(CONFIG.SUCCESS)
+          .setTitle("✅ Laporanmu Sudah Ditindaklanjuti")
+          .setDescription(`Halo ${reporter.displayName},\n\nLaporanmu di **${interaction.guild.name}** sudah ditangani.\n\n**Tindakan:** ${note}\n\nTerima kasih sudah membantu menjaga komuniti! 🙏`)
+          .setFooter({ text: interaction.guild.name })]
+      }).catch(() => {});
+    }
+
+    log(interaction.guild, "✅ Laporan Selesai", `Ditangani oleh ${interaction.user.tag}\n**Catatan:** ${note}`, interaction.user, CONFIG.SUCCESS);
+    setTimeout(() => interaction.channel.delete().catch(() => {}), 12000);
+  }
+
+  // ── BUTTON: rpdismiss (tolak laporan) ──────────────────────────────
+  if (interaction.isButton() && interaction.customId.startsWith("rpdismiss_")) {
+    if (!isStaff(interaction.member))
+      return interaction.reply({ content: "✗ Staff/Mod only.", ephemeral: true });
+
+    const modal = new ModalBuilder().setCustomId(`rpdismiss_note_${interaction.customId.slice(10)}`).setTitle("🚫 Alasan Penolakan Laporan");
+    modal.addComponents(r1(new TextInputBuilder().setCustomId("note").setLabel("Alasan ditolak").setStyle(TextInputStyle.Paragraph).setPlaceholder("Contoh: Bukti tidak cukup, bukan pelanggaran, dll").setRequired(true).setMaxLength(300)));
+    await interaction.showModal(modal);
+  }
+
+  // ── MODAL: rpdismiss_note ─────────────────────────────────────────
+  if (interaction.isModalSubmit() && interaction.customId.startsWith("rpdismiss_note_")) {
+    const reporterId = interaction.customId.split("_")[2];
+    const note = interaction.fields.getTextInputValue("note");
+
+    const embed = new EmbedBuilder()
+      .setColor(0x80848e)
+      .setTitle("🚫 Laporan Ditolak")
+      .setDescription(`**Alasan:** ${note}\n\n> Ditolak oleh ${interaction.user}`)
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed], components: [] });
+
+    const reporter = await interaction.guild.members.fetch(reporterId).catch(() => null);
+    if (reporter) {
+      await reporter.send({
+        embeds: [new EmbedBuilder()
+          .setColor(0x80848e)
+          .setTitle("🚫 Laporanmu Ditolak")
+          .setDescription(`Halo ${reporter.displayName},\n\nLaporanmu di **${interaction.guild.name}** ditolak.\n\n**Alasan:** ${note}\n\nKalau ada bukti tambahan, kamu bisa membuat laporan baru.`)
+          .setFooter({ text: interaction.guild.name })]
+      }).catch(() => {});
+    }
+
+    log(interaction.guild, "🚫 Laporan Ditolak", `Oleh ${interaction.user.tag}\n**Alasan:** ${note}`, interaction.user, 0x80848e);
+    setTimeout(() => interaction.channel.delete().catch(() => {}), 12000);
+  }
+
+  // ── BUTTON: close_report ────────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === "close_report") {
+    const isOwnerOrStaff = isOwner(interaction.user.id) || isStaff(interaction.member);
+    const isReporter      = interaction.channel.topic?.includes(interaction.user.id);
+    if (!isOwnerOrStaff && !isReporter)
+      return interaction.reply({ content: "✗ Kamu tidak bisa menutup report ini.", ephemeral: true });
+
+    await interaction.reply({
+      embeds: [new EmbedBuilder().setColor(CONFIG.DANGER).setDescription("🔒 Menutup report dalam **5 detik**…")],
+    });
+    log(interaction.guild, "🔒 Report Tutup", `Ditutup oleh ${interaction.user.tag}`, interaction.user, CONFIG.DANGER);
+    setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
+  }
 });
 
 // ══════════════════════════════════════════════════════════════════
@@ -581,6 +782,38 @@ function buildFAQ() {
     .setFooter({ text: "Masih bingung? Hubungi staff kami." });
 }
 
+function buildReportPanel() {
+  return new EmbedBuilder()
+    .setColor(0xF87171)
+    .setTitle("🚨 Report Member")
+    .setDescription(
+      "Mengalami pelanggaran dari member lain? Laporkan di sini.\n\n" +
+      "**Bisa dilaporkan:**\n" +
+      "• Spam / iklan tanpa izin\n" +
+      "• Toxic, bullying, atau pelecehan\n" +
+      "• Scam / penipuan\n" +
+      "• Pelanggaran rules server lainnya\n\u200b"
+    )
+    .addFields(
+      { name: "① Buka Ticket",   value: "Klik tombol **Buat Laporan** di bawah.", inline: false },
+      { name: "② Isi Form",      value: "Jelaskan kronologi & lampirkan bukti jika ada.", inline: false },
+      { name: "③ Tim Mod Tindak Lanjut", value: "Laporan diproses secara privat & rahasia.", inline: false },
+      { name: "\u200b", value: "**⚠ Catatan:** Laporan palsu/fitnah dapat dikenakan sanksi." },
+    )
+    .setFooter({ text: "🚨 Cosmic Corner Helper  •  Privat & Rahasia" })
+    .setTimestamp();
+}
+
+function buildReportWelcome(user) {
+  return new EmbedBuilder()
+    .setColor(0xF87171)
+    .setTitle(`🚨 Report — ${user.username}`)
+    .setDescription(`Halo ${user}!\n\nReport ini hanya terlihat oleh kamu dan moderator.\nKlik **Isi Form Laporan** untuk melanjutkan.\n\u200b`)
+    .addFields({ name: "Status", value: "```\n⏳  Menunggu pengisian form\n```" })
+    .setFooter({ text: `ID: ${user.id}` })
+    .setTimestamp();
+}
+
 function buildGiveawayEmbed(gw) {
   const timeLeft = gw.ended ? "Selesai" : `<t:${Math.floor(gw.endsAt/1000)}:R>`;
   return new EmbedBuilder()
@@ -610,6 +843,7 @@ function userHelpEmbed() {
       { name: `\`${PREFIX}ping\``,   value: "Cek latensi bot" },
       { name: `\`${PREFIX}status\``, value: "Cek status verifikasimu" },
       { name: `\`${PREFIX}info\``,   value: "Info bot & prefix" },
+      { name: "\u200b", value: "💗 **Verify:** klik tombol di channel verify-female\n🚨 **Report:** klik tombol di channel report-member" },
     )
     .setFooter({ text: `Staff? Ketik ${STAFF_PREFIX}staffhelp` });
 }
@@ -622,8 +856,11 @@ function staffHelpEmbed() {
     .addFields(
       { name: `\`${STAFF_PREFIX}approve @user\``,         value: "Approve verifikasi manual" },
       { name: `\`${STAFF_PREFIX}reject @user [alasan]\``, value: "Reject verifikasi dengan alasan" },
-      { name: `\`${STAFF_PREFIX}closeticket\``,           value: "Tutup ticket yang sedang dibuka" },
-      { name: `\`${STAFF_PREFIX}tickets\``,               value: "Lihat semua ticket aktif" },
+      { name: `\`${STAFF_PREFIX}closeticket\``,           value: "Tutup ticket verify yang sedang dibuka" },
+      { name: `\`${STAFF_PREFIX}tickets\``,               value: "Lihat semua ticket verify aktif" },
+      { name: "═══ Report ═══", value: "\u200b" },
+      { name: `\`${STAFF_PREFIX}reports\``,               value: "Lihat semua laporan aktif" },
+      { name: `\`${STAFF_PREFIX}closereport\``,           value: "Tutup report yang sedang dibuka" },
       { name: `\`${STAFF_PREFIX}staffhelp\``,             value: "Tampilkan daftar ini" },
     )
     .setFooter({ text: `Owner? Ketik ${OWNER_PREFIX}ownerhelp` });
@@ -636,6 +873,7 @@ function ownerHelpEmbed() {
     .setDescription(`Prefix: \`${OWNER_PREFIX}\``)
     .addFields(
       { name: `\`${OWNER_PREFIX}verifysetup\``,                               value: "Pasang panel verify di channel ini" },
+      { name: `\`${OWNER_PREFIX}reportsetup\``,                               value: "Pasang panel report member di channel ini" },
       { name: `\`${OWNER_PREFIX}giveaway <durasi> <pemenang> <#ch> <hadiah>\``, value: "Buat giveaway baru\nContoh: `cch!! giveaway 1h 1 #giveaway Nitro`" },
       { name: `\`${OWNER_PREFIX}giveawayend <messageId>\``,                   value: "Akhiri giveaway lebih cepat" },
       { name: `\`${OWNER_PREFIX}reroll <messageId>\``,                        value: "Pilih ulang pemenang giveaway" },
@@ -661,6 +899,19 @@ function ticketActionRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("fill_verify_form").setLabel("📝 Isi Form").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId("close_ticket").setLabel("🔒 Tutup").setStyle(ButtonStyle.Danger),
+  );
+}
+
+function reportPanelRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("open_report_ticket").setLabel("🚨 Buat Laporan").setStyle(ButtonStyle.Danger),
+  );
+}
+
+function reportActionRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("fill_report_form").setLabel("📝 Isi Form Laporan").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("close_report").setLabel("🔒 Tutup").setStyle(ButtonStyle.Secondary),
   );
 }
 
