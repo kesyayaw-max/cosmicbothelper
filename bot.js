@@ -45,6 +45,10 @@ const CONFIG = {
 // In-memory giveaway store
 const giveaways = new Map();
 
+// In-memory drop store  { messageId -> dropData }
+// dropData: { prize, token, claimedBy, claimedAt, hostId, channelId, ended }
+const drops = new Map();
+
 // ══════════════════════════════════════════════════════════════════
 //  READY
 // ══════════════════════════════════════════════════════════════════
@@ -111,6 +115,83 @@ client.on("messageCreate", async (msg) => {
       await msg.channel.send({ embeds: [embed], components: [row] });
       await msg.delete().catch(() => {});
       return;
+    }
+
+    // cch!! drop <#channel> <hadiah> | <token/kode>
+    // contoh: cch!! drop #giveaway Discord Nitro 1 Bulan | ABCD-EFGH-IJKL-MNOP
+    // Tanda "|" memisahkan nama hadiah dan isi token/kode yang akan di-DM
+    if (cmd === "drop") {
+      // Ambil semua args setelah "drop"
+      // Format: <#channel> <nama hadiah> | <token>
+      const chMentioned = msg.mentions.channels.first();
+      const rest = args.slice(chMentioned ? 1 : 0).join(" ");
+      const parts = rest.split("|");
+
+      if (parts.length < 2 || !parts[0].trim() || !parts[1].trim()) {
+        return msg.reply({
+          embeds: [errEmbed(
+            `Format: \`${OWNER_PREFIX}drop <#channel> <nama hadiah> | <token/kode>\`\n\n` +
+            `Contoh:\n\`${OWNER_PREFIX}drop #giveaway Discord Nitro 1 Bulan | ABCD-EFGH-IJKL\`\n\n` +
+            `⚠ Token setelah \`|\` akan **di-DM otomatis** ke pemenang, tidak tampil di channel.`
+          )]
+        });
+      }
+
+      const prize = parts[0].trim();
+      const token = parts.slice(1).join("|").trim(); // support token yang mengandung "|"
+      const targetCh = chMentioned
+        || (CONFIG.GIVEAWAY_CHANNEL_ID ? msg.guild.channels.cache.get(CONFIG.GIVEAWAY_CHANNEL_ID) : null)
+        || msg.channel;
+
+      const dropData = {
+        prize,
+        token,
+        claimedBy: null,
+        claimedAt: null,
+        hostId: msg.author.id,
+        channelId: targetCh.id,
+        ended: false,
+      };
+
+      const dropEmbed = buildDropEmbed(dropData);
+      const dropMsg   = await targetCh.send({ embeds: [dropEmbed], components: [dropClaimRow("placeholder")] });
+
+      dropData.messageId = dropMsg.id;
+      drops.set(dropMsg.id, dropData);
+
+      // Patch button dengan msgId asli
+      await dropMsg.edit({ components: [dropClaimRow(dropMsg.id)] });
+
+      if (msg.channel.id !== targetCh.id)
+        await msg.reply({ embeds: [okEmbed(`Drop **${prize}** berhasil dibuat di ${targetCh}! 🎁`)] });
+      else
+        await msg.delete().catch(() => {});
+
+      log(msg.guild, "🎁 Drop Dibuat", `**${prize}** oleh ${msg.author.tag}\nChannel: ${targetCh}`, msg.author, CONFIG.GOLD);
+      return;
+    }
+
+    // cch!! dropcancel <messageId> — batalkan drop yang belum diklaim
+    if (cmd === "dropcancel") {
+      const drop = drops.get(args[0]);
+      if (!drop) return msg.reply({ embeds: [errEmbed("Drop tidak ditemukan.")] });
+      if (drop.claimedBy) return msg.reply({ embeds: [errEmbed("Drop sudah diklaim, tidak bisa dibatalkan.")] });
+
+      drop.ended = true;
+      const ch  = msg.guild.channels.cache.get(drop.channelId);
+      const dm  = await ch?.messages.fetch(drop.messageId).catch(() => null);
+      if (dm) {
+        await dm.edit({
+          embeds: [new EmbedBuilder()
+            .setColor(0x80848e)
+            .setTitle("🚫 Drop Dibatalkan")
+            .setDescription(`Drop **${drop.prize}** telah dibatalkan oleh <@${msg.author.id}>.`)
+            .setTimestamp()],
+          components: [],
+        }).catch(() => {});
+      }
+      drops.delete(args[0]);
+      return msg.reply({ embeds: [okEmbed(`Drop **${drop.prize}** berhasil dibatalkan.`)] });
     }
 
     // cch!! giveaway <durasi> <pemenang> <#channel> <hadiah...>
@@ -498,6 +579,65 @@ client.on("interactionCreate", async (interaction) => {
     return interaction.reply({ content: "🎉 Kamu ikut giveaway! Good luck~", ephemeral: true });
   }
 
+  // ── BUTTON: drop_claim ────────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId.startsWith("drop_claim_")) {
+    const msgId = interaction.customId.slice(11);
+    const drop  = drops.get(msgId);
+
+    if (!drop || drop.ended)
+      return interaction.reply({ content: "❌ Drop ini sudah berakhir atau tidak ditemukan.", ephemeral: true });
+
+    if (drop.claimedBy)
+      return interaction.reply({
+        content: `⚡ Terlambat! Drop ini sudah diklaim oleh <@${drop.claimedBy}>.`,
+        ephemeral: true,
+      });
+
+    // ── KLAIM! Tandai langsung sebelum apapun untuk cegah race condition ──
+    drop.claimedBy = interaction.user.id;
+    drop.claimedAt = Date.now();
+    drop.ended     = true;
+
+    // Update embed di channel jadi "sudah diklaim"
+    await interaction.update({
+      embeds: [buildDropClaimedEmbed(drop, interaction.user)],
+      components: [],
+    });
+
+    // DM token ke pemenang
+    const dmSuccess = await interaction.user.send({
+      embeds: [new EmbedBuilder()
+        .setColor(CONFIG.GOLD)
+        .setTitle("🎁 Hadiahmu Sudah Tiba!")
+        .setDescription(
+          `Selamat **${interaction.user.username}**! 🎉\n\n` +
+          `Kamu berhasil mengklaim drop di **${interaction.guild.name}**!\n\n` +
+          `**Hadiah:** ${drop.prize}\n\n` +
+          `**Token / Kode Hadiah:**\n` +
+          `\`\`\`\n${drop.token}\n\`\`\`\n` +
+          `> Segera gunakan sebelum kadaluarsa ya! 🌸`
+        )
+        .setFooter({ text: `Cosmic Corner  •  ${new Date().toLocaleString("id-ID")}` })
+        .setTimestamp()],
+    }).then(() => true).catch(() => false);
+
+    // Kalau DM gagal (user matikan DM), beritahu di channel (ephemeral)
+    if (!dmSuccess) {
+      await interaction.followUp({
+        content: `⚠️ ${interaction.user} DM-mu tidak bisa dibuka! Aktifkan DM dari server ini lalu hubungi <@${drop.hostId}> untuk klaim hadiahmu.`,
+        ephemeral: false,
+      });
+    }
+
+    log(
+      interaction.guild,
+      "🏆 Drop Diklaim",
+      `**${drop.prize}** diklaim oleh ${interaction.user.tag}\nDM: ${dmSuccess ? "✅ Terkirim" : "❌ Gagal (DM tertutup)"}`,
+      interaction.user,
+      CONFIG.GOLD
+    );
+  }
+
   // ── BUTTON: open_report_ticket ───────────────────────────────────
   if (interaction.isButton() && interaction.customId === "open_report_ticket") {
     const { guild, user } = interaction;
@@ -814,6 +954,37 @@ function buildReportWelcome(user) {
     .setTimestamp();
 }
 
+function buildDropEmbed(drop) {
+  return new EmbedBuilder()
+    .setColor(CONFIG.GOLD)
+    .setTitle("⚡ DROP GIVEAWAY — Siapa Cepat Dia Dapat!")
+    .setDescription(
+      `**Hadiah:** ${drop.prize}\n\n` +
+      `🔥 Klik tombol di bawah **SEKARANG** untuk mengklaim!\n` +
+      `Hanya **1 orang pertama** yang berhasil!\n\u200b`
+    )
+    .addFields(
+      { name: "🎁  Hadiah",    value: drop.prize,              inline: true },
+      { name: "👤  Host",      value: `<@${drop.hostId}>`,     inline: true },
+      { name: "⚡  Kuota",     value: "1 orang",               inline: true },
+      { name: "📬  Pengiriman", value: "Token dikirim via **DM** otomatis ke pemenang", inline: false },
+    )
+    .setFooter({ text: "⚡ Siapa cepat dia dapat! Token langsung di-DM." })
+    .setTimestamp();
+}
+
+function buildDropClaimedEmbed(drop, winner) {
+  return new EmbedBuilder()
+    .setColor(CONFIG.SUCCESS)
+    .setTitle("✅ Drop Sudah Diklaim!")
+    .setDescription(
+      `**${drop.prize}** berhasil diklaim oleh ${winner} 🎉\n\n` +
+      `> Token dikirim via DM otomatis  •  <t:${Math.floor(drop.claimedAt / 1000)}:R>`
+    )
+    .setFooter({ text: "Drop selesai — sampai jumpa di drop berikutnya! 🌸" })
+    .setTimestamp();
+}
+
 function buildGiveawayEmbed(gw) {
   const timeLeft = gw.ended ? "Selesai" : `<t:${Math.floor(gw.endsAt/1000)}:R>`;
   return new EmbedBuilder()
@@ -874,6 +1045,9 @@ function ownerHelpEmbed() {
     .addFields(
       { name: `\`${OWNER_PREFIX}verifysetup\``,                               value: "Pasang panel verify di channel ini" },
       { name: `\`${OWNER_PREFIX}reportsetup\``,                               value: "Pasang panel report member di channel ini" },
+      { name: "═══ Giveaway & Drop ═══", value: "\u200b" },
+      { name: `\`${OWNER_PREFIX}drop <#ch> <hadiah> | <token>\``,             value: "Drop instan — siapa cepat dia dapat, token di-DM otomatis\nContoh: `cch!! drop #giveaway Nitro 1 Bulan | ABCD-1234`" },
+      { name: `\`${OWNER_PREFIX}dropcancel <messageId>\``,                    value: "Batalkan drop yang belum diklaim" },
       { name: `\`${OWNER_PREFIX}giveaway <durasi> <pemenang> <#ch> <hadiah>\``, value: "Buat giveaway baru\nContoh: `cch!! giveaway 1h 1 #giveaway Nitro`" },
       { name: `\`${OWNER_PREFIX}giveawayend <messageId>\``,                   value: "Akhiri giveaway lebih cepat" },
       { name: `\`${OWNER_PREFIX}reroll <messageId>\``,                        value: "Pilih ulang pemenang giveaway" },
@@ -918,6 +1092,12 @@ function reportActionRow() {
 function giveawayRow(msgId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`gw_join_${msgId}`).setLabel("🎉 Ikut Giveaway").setStyle(ButtonStyle.Primary),
+  );
+}
+
+function dropClaimRow(msgId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`drop_claim_${msgId}`).setLabel("⚡ KLAIM SEKARANG!").setStyle(ButtonStyle.Success),
   );
 }
 
